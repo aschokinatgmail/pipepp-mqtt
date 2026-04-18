@@ -27,4 +27,12 @@ struct mqtt_embedded_config : pipepp::core::embedded_config {
     static constexpr std::size_t max_broker_addr_len = 128;
 };
 
+struct mqtt_default_consumer_config : mqtt_default_config {
+    using poll_mode = mqtt_consumer_tag;
+};
+
+struct mqtt_embedded_consumer_config : mqtt_embedded_config {
+    using poll_mode = mqtt_consumer_tag;
+};
+
 } // namespace pipepp::mqtt

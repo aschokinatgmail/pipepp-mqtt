@@ -1,6 +1,7 @@
 #include <pipepp/mqtt/mqtt_source.hpp>
 
 #include <cstring>
+#include <cstdlib>
 #include <thread>
 #include <utility>
 
@@ -13,6 +14,20 @@ namespace paho = ::mqtt;
 #endif
 
 namespace pipepp::mqtt {
+
+namespace {
+
+std::string_view query_param(std::string_view query, std::string_view key) {
+    auto pos = query.find(key);
+    if (pos == std::string_view::npos) return {};
+    auto val_start = pos + key.size();
+    if (val_start >= query.size() || query[val_start] != '=') return {};
+    ++val_start;
+    auto val_end = query.find('&', val_start);
+    return query.substr(val_start, val_end == std::string_view::npos ? std::string_view::npos : val_end - val_start);
+}
+
+}
 
 template<typename Config>
 struct mqtt_impl {
@@ -99,7 +114,44 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
         std::string port = uri.port.empty()
             ? std::string(static_cast<std::string_view>(s->broker_port))
             : std::string(uri.port);
-        std::string server_uri = "tcp://" + host + ":" + port;
+
+        if (uri.scheme == "mqtts" || uri.scheme == "ssl" || uri.scheme == "tls") {
+            s->ssl_enabled = true;
+        }
+
+        if (port.empty()) {
+            port = s->ssl_enabled ? "8883" : "1883";
+        }
+
+        std::string proto = s->ssl_enabled ? "ssl://" : "tcp://";
+        std::string server_uri = proto + host + ":" + port;
+
+        if (!uri.userinfo().empty()) {
+            auto info = uri.userinfo();
+            auto colon = info.find(':');
+            if (colon != std::string_view::npos) {
+                s->username.checked_from(info.substr(0, colon));
+                s->password.checked_from(info.substr(colon + 1));
+            } else {
+                s->username.checked_from(info);
+            }
+        }
+
+        int keepalive = s->keepalive;
+        bool clean_session = s->clean_session;
+        int mqtt_version = s->mqtt_version;
+
+        if (!uri.query.empty()) {
+            if (auto v = query_param(uri.query, "keepalive"); !v.empty())
+                keepalive = std::atoi(v.data());
+            if (auto v = query_param(uri.query, "clean"); !v.empty())
+                clean_session = (v == "1" || v == "true");
+            if (auto v = query_param(uri.query, "version"); !v.empty())
+                mqtt_version = std::atoi(v.data());
+            if (auto v = query_param(uri.query, "clientid"); !v.empty())
+                s->client_id.checked_from(v);
+        }
+
         std::string cid = s->client_id.empty()
             ? std::string("pipepp-") + std::to_string(reinterpret_cast<std::uintptr_t>(this))
             : std::string(static_cast<std::string_view>(s->client_id));
@@ -108,8 +160,8 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
         s->client = cli;
 
         auto conn_opts = paho::connect_options_builder()
-            .keep_alive_interval(std::chrono::seconds(s->keepalive))
-            .clean_session(s->clean_session)
+            .keep_alive_interval(std::chrono::seconds(keepalive))
+            .clean_session(clean_session)
             .automatic_reconnect(std::chrono::seconds(s->reconnect_min_s),
                                  std::chrono::seconds(s->reconnect_max_s))
             .finalize();
@@ -357,5 +409,7 @@ void mqtt_source<Config>::set_broker(std::string_view host, std::string_view por
 
 template class mqtt_source<mqtt_default_config>;
 template class mqtt_source<mqtt_embedded_config>;
+template class mqtt_source<mqtt_default_consumer_config>;
+template class mqtt_source<mqtt_embedded_consumer_config>;
 
 } // namespace pipepp::mqtt

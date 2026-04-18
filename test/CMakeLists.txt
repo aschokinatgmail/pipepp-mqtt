@@ -7,6 +7,7 @@ add_executable(pipepp-mqtt-unit-tests
     unit/test_mqtt_config.cpp
     unit/test_mqtt_error.cpp
     unit/test_mqtt_source.cpp
+    unit/test_mqtt_uri.cpp
 )
 target_link_libraries(pipepp-mqtt-unit-tests PRIVATE pipepp-mqtt GTest::gtest_main)
 target_include_directories(pipepp-mqtt-unit-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
