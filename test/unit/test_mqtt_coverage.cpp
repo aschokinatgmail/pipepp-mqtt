@@ -28,6 +28,7 @@ static std::string unique_cov_topic(const char* suffix) {
            "/" + suffix;
 }
 
+
 template<typename Config>
 static void exercise_all() {
     mqtt_source<Config> src;
