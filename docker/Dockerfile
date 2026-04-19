@@ -2,23 +2,31 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake clang libc++-dev libc++abi-dev \
-    git mosquitto mosquitto-clients \
-    libpaho-mqtt-dev libpaho-mqttpp-dev \
-    openssl libssl-dev libgtest-dev \
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    cmake \
+    clang \
+    libc++-dev \
+    libc++abi-dev \
+    git \
+    mosquitto \
+    mosquitto-clients \
+    libpaho-mqtt-dev \
+    libpaho-mqttpp-dev \
+    libssl-dev \
+    libgtest-dev \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY generate-certs.sh /usr/local/bin/generate-certs.sh
-COPY setup-auth.sh /usr/local/bin/setup-auth.sh
+RUN mkdir -p /run/mosquitto && chown mosquitto:mosquitto /run/mosquitto
+
 COPY mosquitto.conf /etc/mosquitto/conf.d/custom.conf
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY generate-certs.sh /generate-certs.sh
+COPY setup-auth.sh /setup-auth.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /generate-certs.sh /setup-auth.sh /entrypoint.sh
 
-RUN chmod +x /usr/local/bin/generate-certs.sh \
-    /usr/local/bin/setup-auth.sh \
-    /usr/local/bin/entrypoint.sh
+WORKDIR /build
 
-EXPOSE 1883 8883
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

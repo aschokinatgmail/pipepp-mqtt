@@ -53,8 +53,8 @@ install(EXPORT pipepp-mqtt-targets
 
 set(PIPEPP_MQTT_TEST_BROKER "bms-logging-server.local" CACHE STRING "MQTT broker for integration tests")
 set(PIPEPP_MQTT_TEST_PORT 1883 CACHE STRING "MQTT broker port for integration tests")
-set(PIPEPP_MQTT_TEST_TLS_PORT 8883 CACHE STRING "MQTT broker TLS port for integration tests")
-set(PIPEPP_MQTT_TEST_CA_CERT "" CACHE STRING "CA certificate path for TLS integration tests")
+set(PIPEPP_MQTT_TEST_TLS_PORT 8883 CACHE STRING "MQTT TLS broker port for integration tests")
+set(PIPEPP_MQTT_TEST_CA_CERT "/etc/mosquitto/certs/ca.crt" CACHE STRING "CA certificate path for TLS integration tests")
 
 if(PIPEPP_MQTT_BUILD_TESTS)
     enable_testing()

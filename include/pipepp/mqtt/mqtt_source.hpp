@@ -17,7 +17,6 @@
 
 namespace pipepp::mqtt {
 
-
 template<typename Config>
 struct mqtt_impl;
 
