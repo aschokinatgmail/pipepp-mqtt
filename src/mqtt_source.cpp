@@ -109,6 +109,7 @@ mqtt_source<Config>::~mqtt_source() {
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
         if (p->client) {
             p->client->set_connected_handler(nullptr);
+            p->client->set_connection_lost_handler(nullptr);
             if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
                 p->client->set_message_callback(nullptr);
             }
@@ -144,6 +145,7 @@ mqtt_source<Config>& mqtt_source<Config>::operator=(mqtt_source&& other) noexcep
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
             if (p->client) {
                 p->client->set_connected_handler(nullptr);
+                p->client->set_connection_lost_handler(nullptr);
                 if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
                     p->client->set_message_callback(nullptr);
                 }
@@ -179,6 +181,7 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
                 s->client->disconnect(std::chrono::seconds(2))->wait_for(std::chrono::seconds(5));
             } catch (...) {}
             s->client->set_connected_handler(nullptr);
+            s->client->set_connection_lost_handler(nullptr);
             if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
                 s->client->set_message_callback(nullptr);
             }
@@ -274,6 +277,10 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
             }
         });
 
+        cli->set_connection_lost_handler([s](const std::string&) {
+            s->connected.store(false, std::memory_order_release);
+        });
+
         auto conn_opts = paho::connect_options_builder()
             .keep_alive_interval(std::chrono::seconds(keepalive))
             .clean_session(clean_session)
@@ -359,6 +366,7 @@ pipepp::core::result mqtt_source<Config>::disconnect() {
             s->client->disconnect(std::chrono::seconds(5))->wait_for(std::chrono::seconds(10));
         } catch (...) {}
         s->client->set_connected_handler(nullptr);
+        s->client->set_connection_lost_handler(nullptr);
         if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
             s->client->set_message_callback(nullptr);
         }
@@ -465,7 +473,10 @@ pipepp::core::result mqtt_source<Config>::publish(std::string_view topic,
             std::string(topic),
             payload.data(), payload.size(),
             qos, false);
-        s->client->publish(msg);
+        auto token = s->client->publish(msg);
+        if (qos > 0) {
+            token->wait_for(std::chrono::seconds(5));
+        }
         return {};
     } catch (const paho::exception&) {
         return pipepp::core::result{
@@ -540,28 +551,28 @@ void mqtt_source<Config>::poll() {
 template<typename Config>
 void mqtt_source<Config>::set_client_id(std::string_view id) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->client_id.from_or_truncate(id);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_keepalive(int seconds) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->keepalive = seconds;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_clean_session(bool clean) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->clean_session = clean;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_automatic_reconnect(int min_s, int max_s) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->auto_reconnect = true;
     s->reconnect_min_s = min_s;
     s->reconnect_max_s = max_s;
@@ -570,7 +581,7 @@ void mqtt_source<Config>::set_automatic_reconnect(int min_s, int max_s) {
 template<typename Config>
 void mqtt_source<Config>::set_will(std::string_view topic, std::span<const std::byte> payload, int qos, bool retained) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->will_topic.from_or_truncate(topic);
     auto copy_len = payload.size() < Config::max_payload_len ? payload.size() : Config::max_payload_len;
     std::memcpy(s->will_payload, payload.data(), copy_len);
@@ -583,21 +594,21 @@ void mqtt_source<Config>::set_will(std::string_view topic, std::span<const std::
 template<typename Config>
 void mqtt_source<Config>::set_username(std::string_view user) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->username.from_or_truncate(user);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_password(std::string_view pass) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->password.from_or_truncate(pass);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_ssl(std::string_view trust_store, std::string_view key_store, std::string_view private_key) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->ssl_enabled = true;
     s->ssl_trust_store.from_or_truncate(trust_store);
     s->ssl_key_store.from_or_truncate(key_store);
@@ -607,14 +618,14 @@ void mqtt_source<Config>::set_ssl(std::string_view trust_store, std::string_view
 template<typename Config>
 void mqtt_source<Config>::set_mqtt_version(int version) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->mqtt_version = version;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_broker(std::string_view host, std::string_view port) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    if (!s) return;
+    if (!s || s->connected.load(std::memory_order_acquire)) return;
     s->broker_host.from_or_truncate(host);
     s->broker_port.from_or_truncate(port);
 }
