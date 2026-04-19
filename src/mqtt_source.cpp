@@ -424,6 +424,12 @@ pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int 
             pipepp::core::make_unexpected(pipepp::core::error_code::connection_failed)};
     }
 #else
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s || !s->connected.load(std::memory_order_acquire)) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::not_connected)};
+    }
     return {};
 #endif
 }
@@ -467,6 +473,12 @@ pipepp::core::result mqtt_source<Config>::publish(std::string_view topic,
             pipepp::core::make_unexpected(pipepp::core::error_code::connection_failed)};
     }
 #else
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s || !s->connected.load(std::memory_order_acquire)) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::not_connected)};
+    }
     return {};
 #endif
 }

@@ -55,6 +55,12 @@ private:
 };
 
 static_assert(pipepp::core::BusSource<mqtt_source<mqtt_default_config>, mqtt_default_config>,
-              "mqtt_source must satisfy BusSource concept");
+              "mqtt_source<mqtt_default_config> must satisfy BusSource concept");
+static_assert(pipepp::core::BusSource<mqtt_source<mqtt_embedded_config>, mqtt_embedded_config>,
+              "mqtt_source<mqtt_embedded_config> must satisfy BusSource concept");
+static_assert(pipepp::core::BusSource<mqtt_source<mqtt_default_consumer_config>, mqtt_default_consumer_config>,
+              "mqtt_source<mqtt_default_consumer_config> must satisfy BusSource concept");
+static_assert(pipepp::core::BusSource<mqtt_source<mqtt_embedded_consumer_config>, mqtt_embedded_consumer_config>,
+              "mqtt_source<mqtt_embedded_consumer_config> must satisfy BusSource concept");
 
 } // namespace pipepp::mqtt

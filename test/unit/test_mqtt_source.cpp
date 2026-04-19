@@ -49,15 +49,14 @@ TEST(MqttSourceTest, MoveAssignable) {
 TEST(MqttSourceTest, SubscribeWhenNotConnectedReturnsError) {
     mqtt_source<mqtt_default_config> src;
     auto r = src.subscribe("test/topic", 0);
-    // In stub mode this returns success; with Paho it returns not_connected
-    // Either way it should not crash
+    EXPECT_FALSE(r.has_value());
 }
 
 TEST(MqttSourceTest, PublishWhenNotConnectedReturnsError) {
     mqtt_source<mqtt_default_config> src;
     std::byte payload[4]{};
     auto r = src.publish("test/topic", payload, 0);
-    // In stub mode this returns success; with Paho it returns not_connected
+    EXPECT_FALSE(r.has_value());
 }
 
 TEST(MqttSourceTest, QoSValidationRejectsInvalid) {
