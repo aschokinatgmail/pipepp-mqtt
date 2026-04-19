@@ -249,3 +249,21 @@ TEST(MqttCoverage, SetWillOverflowDefault) { exercise_set_will_overflow<mqtt_def
 TEST(MqttCoverage, SetWillOverflowEmbedded) { exercise_set_will_overflow<mqtt_embedded_config>(); }
 TEST(MqttCoverage, SetWillOverflowConsumer) { exercise_set_will_overflow<mqtt_default_consumer_config>(); }
 TEST(MqttCoverage, SetWillOverflowEmbeddedConsumer) { exercise_set_will_overflow<mqtt_embedded_consumer_config>(); }
+
+TEST(MqttCoverage, SettersNoOpAfterConnect) {
+    mqtt_source<mqtt_default_config> src;
+    connect_to_broker(src);
+
+    src.set_keepalive(99);
+    src.set_clean_session(false);
+    src.set_mqtt_version(5);
+    src.set_client_id("changed");
+
+    EXPECT_TRUE(src.is_connected());
+
+    std::byte data[] = {std::byte{0x01}};
+    auto pr = src.publish("setter/test", data, 0);
+    EXPECT_TRUE(pr.has_value());
+
+    src.disconnect();
+}
