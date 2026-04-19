@@ -52,7 +52,6 @@ public:
 
 private:
     void* impl_ = nullptr;
-    bool connected_ = false;
 };
 
 static_assert(pipepp::core::BusSource<mqtt_source<mqtt_default_config>, mqtt_default_config>,
