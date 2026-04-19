@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <pipepp/mqtt/mqtt.hpp>
 #include <pipepp/core/concepts.hpp>
+#include <chrono>
+#include <cstdint>
 
 using namespace pipepp::mqtt;
 using namespace pipepp::core;
@@ -8,12 +10,10 @@ using namespace pipepp::core;
 static constexpr const char* kBroker = PIPEPP_MQTT_TEST_BROKER;
 static constexpr int kPort = PIPEPP_MQTT_TEST_PORT;
 
-static std::string broker_uri() {
-    return std::string("mqtt://") + kBroker + ":" + std::to_string(kPort);
-}
-
 template<typename Config>
 static void connect_to_broker(mqtt_source<Config>& src) {
+    auto uid = std::to_string(reinterpret_cast<uintptr_t>(&src));
+    src.set_client_id(("cov-" + uid).c_str());
     src.set_broker(kBroker, std::to_string(kPort).c_str());
     auto r = src.connect();
     ASSERT_TRUE(r.has_value()) << "connect() failed — is broker running at "
@@ -21,36 +21,50 @@ static void connect_to_broker(mqtt_source<Config>& src) {
     EXPECT_TRUE(src.is_connected());
 }
 
+static std::string unique_cov_topic(const char* suffix) {
+    return std::string("cov/") +
+           std::to_string(::getpid()) + "/" +
+           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+           "/" + suffix;
+}
+
 template<typename Config>
 static void exercise_all() {
     mqtt_source<Config> src;
     EXPECT_FALSE(src.is_connected());
 
-    src.set_client_id("cov-client");
+    auto uid = std::to_string(reinterpret_cast<uintptr_t>(&src));
+    src.set_client_id(("cov-cli-" + uid).c_str());
     src.set_keepalive(45);
     src.set_clean_session(false);
     src.set_automatic_reconnect(2, 60);
     src.set_mqtt_version(4);
     src.set_broker(kBroker, std::to_string(kPort).c_str());
 
+    auto will_topic = unique_cov_topic("will");
     std::byte will_data[] = {std::byte{0x01}};
-    src.set_will("cov/will", will_data, 1, true);
+    src.set_will(will_topic.c_str(), will_data, 1, true);
 
     auto r = src.connect();
     ASSERT_TRUE(r.has_value());
     EXPECT_TRUE(src.is_connected());
 
-    auto sr = src.subscribe("cov/topic", 0);
+    auto pub_topic = unique_cov_topic("pub");
+    auto sr = src.subscribe(pub_topic.c_str(), 0);
     EXPECT_TRUE(sr.has_value());
-
-    std::byte pub_data[] = {std::byte{0x42}};
-    auto pr = src.publish("cov/topic", pub_data, 0);
-    EXPECT_TRUE(pr.has_value());
 
     bool cb_called = false;
     src.set_message_callback([&](const message_view&) { cb_called = true; });
 
-    src.poll();
+    std::byte pub_data[] = {std::byte{0x42}};
+    auto pr = src.publish(pub_topic.c_str(), pub_data, 0);
+    EXPECT_TRUE(pr.has_value());
+
+    for (int i = 0; i < 20 && !cb_called; ++i) {
+        src.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_TRUE(cb_called);
 
     auto dr = src.disconnect();
     EXPECT_TRUE(dr.has_value());
