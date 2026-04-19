@@ -17,7 +17,6 @@
 
 namespace pipepp::mqtt {
 
-using namespace pipepp::core;
 
 template<typename Config>
 struct mqtt_impl;
@@ -34,12 +33,12 @@ public:
     mqtt_source(mqtt_source&& other) noexcept;
     mqtt_source& operator=(mqtt_source&& other) noexcept;
 
-    result connect(uri_view uri = {});
-    result disconnect();
+    pipepp::core::result connect(pipepp::core::uri_view uri = {});
+    pipepp::core::result disconnect();
     bool is_connected() const;
-    result subscribe(std::string_view topic, int qos);
-    result publish(std::string_view topic, std::span<const std::byte> payload, int qos);
-    void set_message_callback(message_callback<Config> cb);
+    pipepp::core::result subscribe(std::string_view topic, int qos);
+    pipepp::core::result publish(std::string_view topic, std::span<const std::byte> payload, int qos);
+    void set_message_callback(pipepp::core::message_callback<Config> cb);
     void poll();
 
     void set_client_id(std::string_view id);
@@ -50,6 +49,7 @@ public:
     void set_username(std::string_view user);
     void set_password(std::string_view pass);
     void set_ssl(std::string_view trust_store, std::string_view key_store, std::string_view private_key);
+    void set_ssl_verify(bool enable);
     void set_mqtt_version(int version);
     void set_broker(std::string_view host, std::string_view port);
 
