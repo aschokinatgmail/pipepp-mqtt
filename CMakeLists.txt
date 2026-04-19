@@ -57,6 +57,11 @@ set(PIPEPP_MQTT_TEST_TLS_PORT 8883 CACHE STRING "MQTT TLS broker port for integr
 set(PIPEPP_MQTT_TEST_CA_CERT "/etc/mosquitto/certs/ca.crt" CACHE STRING "CA certificate path for TLS integration tests")
 
 if(PIPEPP_MQTT_BUILD_TESTS)
+    option(PIPEPP_MQTT_ENABLE_COVERAGE "Enable code coverage" OFF)
+    if(PIPEPP_MQTT_ENABLE_COVERAGE)
+        target_compile_options(pipepp-mqtt PRIVATE --coverage -g -O0)
+        target_link_libraries(pipepp-mqtt INTERFACE --coverage)
+    endif()
     enable_testing()
     add_subdirectory(test)
 endif()
