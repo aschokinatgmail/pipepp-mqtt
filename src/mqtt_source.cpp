@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <cstdlib>
 #include <thread>
 #include <utility>
 
@@ -19,6 +18,15 @@ namespace paho = ::mqtt;
 namespace pipepp::mqtt {
 
 namespace {
+
+int parse_int(std::string_view sv) {
+    int result = 0;
+    for (char c : sv) {
+        if (c < '0' || c > '9') break;
+        result = result * 10 + (c - '0');
+    }
+    return result;
+}
 
 std::string_view query_param(std::string_view query, std::string_view key) {
     auto pos = query.find(key);
@@ -79,12 +87,14 @@ struct mqtt_impl {
     sub_entry subscriptions[max_subscriptions]{};
     std::size_t sub_count = 0;
 
-    void add_subscription(std::string_view topic, int qos) {
+    bool add_subscription(std::string_view topic, int qos) {
         if (sub_count < max_subscriptions) {
-            subscriptions[sub_count].topic.checked_from(topic);
+            subscriptions[sub_count].topic.from_or_truncate(topic);
             subscriptions[sub_count].qos = qos;
             ++sub_count;
+            return true;
         }
+        return false;
     }
 };
 
@@ -184,6 +194,12 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
             ? std::string(static_cast<std::string_view>(s->broker_port))
             : std::string(uri.port);
 
+        if (host.empty()) {
+            return pipepp::core::result{
+                pipepp::core::unexpect,
+                pipepp::core::make_unexpected(pipepp::core::error_code::invalid_uri)};
+        }
+
         if (uri.scheme == "mqtts" || uri.scheme == "ssl" || uri.scheme == "tls") {
             s->ssl_enabled = true;
         }
@@ -199,10 +215,10 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
             auto info = uri.userinfo();
             auto colon = info.find(':');
             if (colon != std::string_view::npos) {
-                s->username.checked_from(info.substr(0, colon));
-                s->password.checked_from(info.substr(colon + 1));
+                s->username.from_or_truncate(info.substr(0, colon));
+                s->password.from_or_truncate(info.substr(colon + 1));
             } else {
-                s->username.checked_from(info);
+                s->username.from_or_truncate(info);
             }
         }
 
@@ -212,13 +228,13 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
 
         if (!uri.query.empty()) {
             if (auto v = query_param(uri.query, "keepalive"); !v.empty())
-                keepalive = std::atoi(v.data());
+                keepalive = parse_int(v);
             if (auto v = query_param(uri.query, "clean"); !v.empty())
                 clean_session = (v == "1" || v == "true");
             if (auto v = query_param(uri.query, "version"); !v.empty())
-                mqtt_version = std::atoi(v.data());
+                mqtt_version = parse_int(v);
             if (auto v = query_param(uri.query, "clientid"); !v.empty())
-                s->client_id.checked_from(v);
+                s->client_id.from_or_truncate(v);
         }
 
         std::string cid = s->client_id.empty()
@@ -372,6 +388,11 @@ bool mqtt_source<Config>::is_connected() const {
 
 template<typename Config>
 pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int qos) {
+    if (topic.empty()) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::invalid_argument)};
+    }
     if (qos < 0 || qos > 2) {
         return pipepp::core::result{
             pipepp::core::unexpect,
@@ -379,6 +400,11 @@ pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int 
     }
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::not_connected)};
+    }
     if (!s->connected.load(std::memory_order_acquire)) {
         return pipepp::core::result{
             pipepp::core::unexpect,
@@ -386,7 +412,11 @@ pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int 
     }
     try {
         s->client->subscribe(std::string(topic), qos)->wait_for(std::chrono::seconds(5));
-        s->add_subscription(topic, qos);
+        if (!s->add_subscription(topic, qos)) {
+            return pipepp::core::result{
+                pipepp::core::unexpect,
+                pipepp::core::make_unexpected(pipepp::core::error_code::capacity_exceeded)};
+        }
         return {};
     } catch (const paho::exception&) {
         return pipepp::core::result{
@@ -402,6 +432,11 @@ template<typename Config>
 pipepp::core::result mqtt_source<Config>::publish(std::string_view topic,
                                                     std::span<const std::byte> payload,
                                                     int qos) {
+    if (topic.empty()) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::invalid_argument)};
+    }
     if (qos < 0 || qos > 2) {
         return pipepp::core::result{
             pipepp::core::unexpect,
@@ -409,6 +444,11 @@ pipepp::core::result mqtt_source<Config>::publish(std::string_view topic,
     }
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::not_connected)};
+    }
     if (!s->connected.load(std::memory_order_acquire)) {
         return pipepp::core::result{
             pipepp::core::unexpect,
@@ -434,6 +474,7 @@ pipepp::core::result mqtt_source<Config>::publish(std::string_view topic,
 template<typename Config>
 void mqtt_source<Config>::set_message_callback(pipepp::core::message_callback<Config> cb) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
     s->callback = std::move(cb);
     s->callback_installed = true;
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
@@ -486,22 +527,29 @@ void mqtt_source<Config>::poll() {
 
 template<typename Config>
 void mqtt_source<Config>::set_client_id(std::string_view id) {
-    static_cast<mqtt_impl<Config>*>(impl_)->client_id.checked_from(id);
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->client_id.from_or_truncate(id);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_keepalive(int seconds) {
-    static_cast<mqtt_impl<Config>*>(impl_)->keepalive = seconds;
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->keepalive = seconds;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_clean_session(bool clean) {
-    static_cast<mqtt_impl<Config>*>(impl_)->clean_session = clean;
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->clean_session = clean;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_automatic_reconnect(int min_s, int max_s) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
     s->auto_reconnect = true;
     s->reconnect_min_s = min_s;
     s->reconnect_max_s = max_s;
@@ -510,7 +558,8 @@ void mqtt_source<Config>::set_automatic_reconnect(int min_s, int max_s) {
 template<typename Config>
 void mqtt_source<Config>::set_will(std::string_view topic, std::span<const std::byte> payload, int qos, bool retained) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    s->will_topic.checked_from(topic);
+    if (!s) return;
+    s->will_topic.from_or_truncate(topic);
     auto copy_len = payload.size() < Config::max_payload_len ? payload.size() : Config::max_payload_len;
     std::memcpy(s->will_payload, payload.data(), copy_len);
     s->will_payload_len = copy_len;
@@ -521,33 +570,41 @@ void mqtt_source<Config>::set_will(std::string_view topic, std::span<const std::
 
 template<typename Config>
 void mqtt_source<Config>::set_username(std::string_view user) {
-    static_cast<mqtt_impl<Config>*>(impl_)->username.checked_from(user);
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->username.from_or_truncate(user);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_password(std::string_view pass) {
-    static_cast<mqtt_impl<Config>*>(impl_)->password.checked_from(pass);
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->password.from_or_truncate(pass);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_ssl(std::string_view trust_store, std::string_view key_store, std::string_view private_key) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
     s->ssl_enabled = true;
-    s->ssl_trust_store.checked_from(trust_store);
-    s->ssl_key_store.checked_from(key_store);
-    s->ssl_private_key.checked_from(private_key);
+    s->ssl_trust_store.from_or_truncate(trust_store);
+    s->ssl_key_store.from_or_truncate(key_store);
+    s->ssl_private_key.from_or_truncate(private_key);
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_mqtt_version(int version) {
-    static_cast<mqtt_impl<Config>*>(impl_)->mqtt_version = version;
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->mqtt_version = version;
 }
 
 template<typename Config>
 void mqtt_source<Config>::set_broker(std::string_view host, std::string_view port) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
-    s->broker_host.checked_from(host);
-    s->broker_port.checked_from(port);
+    if (!s) return;
+    s->broker_host.from_or_truncate(host);
+    s->broker_port.from_or_truncate(port);
 }
 
 template class mqtt_source<mqtt_default_config>;
