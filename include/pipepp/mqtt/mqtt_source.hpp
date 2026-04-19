@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -18,6 +19,9 @@
 namespace pipepp::mqtt {
 
 using namespace pipepp::core;
+
+template<typename Config>
+struct mqtt_impl;
 
 template<typename Config = mqtt_default_config>
 class mqtt_source {
@@ -51,7 +55,7 @@ public:
     void set_broker(std::string_view host, std::string_view port);
 
 private:
-    void* impl_ = nullptr;
+    std::unique_ptr<mqtt_impl<Config>> impl_;
 };
 
 static_assert(pipepp::core::BusSource<mqtt_source<mqtt_default_config>, mqtt_default_config>,

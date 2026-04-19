@@ -5,6 +5,22 @@
 using namespace pipepp::mqtt;
 using namespace pipepp::core;
 
+static constexpr const char* kBroker = PIPEPP_MQTT_TEST_BROKER;
+static constexpr int kPort = PIPEPP_MQTT_TEST_PORT;
+
+static std::string broker_uri() {
+    return std::string("mqtt://") + kBroker + ":" + std::to_string(kPort);
+}
+
+template<typename Config>
+static void connect_to_broker(mqtt_source<Config>& src) {
+    src.set_broker(kBroker, std::to_string(kPort).c_str());
+    auto r = src.connect();
+    ASSERT_TRUE(r.has_value()) << "connect() failed — is broker running at "
+                               << kBroker << ":" << kPort << "?";
+    EXPECT_TRUE(src.is_connected());
+}
+
 template<typename Config>
 static void exercise_all() {
     mqtt_source<Config> src;
@@ -14,17 +30,14 @@ static void exercise_all() {
     src.set_keepalive(45);
     src.set_clean_session(false);
     src.set_automatic_reconnect(2, 60);
-    src.set_username("cov-user");
-    src.set_password("cov-pass");
-    src.set_mqtt_version(5);
-    src.set_broker("cov-broker.local", "2883");
+    src.set_mqtt_version(4);
+    src.set_broker(kBroker, std::to_string(kPort).c_str());
 
     std::byte will_data[] = {std::byte{0x01}};
     src.set_will("cov/will", will_data, 1, true);
-    src.set_ssl("/cov/ca.crt", "/cov/client.crt", "/cov/client.key");
 
     auto r = src.connect();
-    EXPECT_TRUE(r.has_value());
+    ASSERT_TRUE(r.has_value());
     EXPECT_TRUE(src.is_connected());
 
     auto sr = src.subscribe("cov/topic", 0);
@@ -54,14 +67,13 @@ static void exercise_all() {
 template<typename Config>
 static void exercise_connected_destructor() {
     mqtt_source<Config> src;
-    src.connect();
-    EXPECT_TRUE(src.is_connected());
+    connect_to_broker(src);
 }
 
 template<typename Config>
 static void exercise_valid_qos() {
     mqtt_source<Config> src;
-    src.connect();
+    connect_to_broker(src);
 
     EXPECT_TRUE(src.subscribe("qos/0", 0).has_value());
     EXPECT_TRUE(src.subscribe("qos/1", 1).has_value());
@@ -138,9 +150,9 @@ TEST(MqttCoverage, AllErrorMessages) {
 template<typename Config>
 static void exercise_move_assign_connected_dst() {
     mqtt_source<Config> src1;
-    src1.connect();
+    connect_to_broker(src1);
     mqtt_source<Config> src2;
-    src2.connect();
+    connect_to_broker(src2);
     EXPECT_TRUE(src2.is_connected());
     src2 = std::move(src1);
     EXPECT_TRUE(src2.is_connected());
@@ -148,7 +160,7 @@ static void exercise_move_assign_connected_dst() {
 
 TEST(MqttCoverage, MoveAssignConnectedDefault) {
     mqtt_source<mqtt_default_config> src1;
-    src1.connect();
+    connect_to_broker(src1);
     EXPECT_TRUE(src1.is_connected());
     mqtt_source<mqtt_default_config> src2;
     src2 = std::move(src1);
@@ -157,7 +169,7 @@ TEST(MqttCoverage, MoveAssignConnectedDefault) {
 
 TEST(MqttCoverage, MoveAssignConnectedEmbedded) {
     mqtt_source<mqtt_embedded_config> src1;
-    src1.connect();
+    connect_to_broker(src1);
     mqtt_source<mqtt_embedded_config> src2;
     src2 = std::move(src1);
     EXPECT_TRUE(src2.is_connected());
@@ -182,7 +194,7 @@ TEST(MqttCoverage, MoveAssignConnectedDstEmbeddedConsumer) {
 template<typename Config>
 static void exercise_self_assign() {
     mqtt_source<Config> src;
-    src.connect();
+    connect_to_broker(src);
     src = std::move(src);
 }
 
