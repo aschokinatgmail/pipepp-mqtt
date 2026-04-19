@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 (GCC)
+            dockerfile: docker/Dockerfile.ubuntu
+            image: mqtt-ubuntu
+          - name: Alpine 3.21 (GCC -Os)
+            dockerfile: docker/Dockerfile.alpine
+            image: mqtt-alpine
+          - name: Fedora 42 (GCC)
+            dockerfile: docker/Dockerfile.fedora
+            image: mqtt-fedora
+
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aschokinatgmail/pipepp-core
+          path: pipepp-core
+
+      - name: Build image
+        run: docker build -f ${{ matrix.dockerfile }} -t ${{ matrix.image }} docker/
+
+      - name: Build and test
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/src \
+            -v ${{ github.workspace }}/pipepp-core:/pipepp-core \
+            ${{ matrix.image }}
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: test
+    name: Coverage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aschokinatgmail/pipepp-core
+          path: pipepp-core
+
+      - name: Build image
+        run: docker build -f docker/Dockerfile.coverage -t mqtt-coverage docker/
+
+      - name: Build, test, and report
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/src \
+            -v ${{ github.workspace }}/pipepp-core:/pipepp-core \
+            mqtt-coverage
