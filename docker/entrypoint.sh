@@ -11,7 +11,13 @@ chmod 640 /etc/mosquitto/passwd
 
 echo "Starting Mosquitto broker..."
 mosquitto -c /etc/mosquitto/mosquitto.conf -d
-sleep 1
+
+for i in $(seq 1 50); do
+    if bash -c 'echo > /dev/tcp/localhost/1883' 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
 
 PID=$(pgrep -x mosquitto || echo "unknown")
 echo "Mosquitto broker is running (PID: $PID)"

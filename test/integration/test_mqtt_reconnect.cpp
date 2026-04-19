@@ -92,3 +92,49 @@ TEST(MqttReconnectTest, ConsumerReconnectAfterBrokerRestart) {
     pipepp_test::start_broker();
     src.disconnect();
 }
+
+TEST(MqttReconnectTest, TlsConnectionLostAndReconnect) {
+    pipepp_test::start_broker();
+    mqtt_source<mqtt_default_config> pub;
+    mqtt_source<mqtt_default_config> sub;
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub, "rc-tls-pub")) << "TLS publisher connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub, "rc-tls-sub")) << "TLS subscriber connect failed";
+
+    auto topic = pipepp_test::unique_topic("pipepp-reconn-test/", "tls-restart");
+    std::atomic<bool> received{false};
+    sub.set_message_callback([&](const message_view&) { received.store(true); });
+    sub.subscribe(topic, 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::byte p[] = {std::byte{0xCC}};
+    auto pr = pub.publish(topic, p, 1);
+    ASSERT_TRUE(pr.has_value());
+    EXPECT_TRUE(pipepp_test::wait_for_message(received)) << "TLS publish before restart should work";
+
+    pub.disconnect();
+    sub.disconnect();
+
+    pipepp_test::stop_broker();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    pipepp_test::start_broker();
+
+    mqtt_source<mqtt_default_config> pub2;
+    mqtt_source<mqtt_default_config> sub2;
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub2, "rc-tls-pub2")) << "TLS publisher reconnect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub2, "rc-tls-sub2")) << "TLS subscriber reconnect failed";
+
+    auto topic2 = pipepp_test::unique_topic("pipepp-reconn-test/", "tls-after-restart");
+    std::atomic<bool> received2{false};
+    sub2.set_message_callback([&](const message_view&) { received2.store(true); });
+    sub2.subscribe(topic2, 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::byte q[] = {std::byte{0xDD}};
+    auto pr2 = pub2.publish(topic2, q, 1);
+    ASSERT_TRUE(pr2.has_value());
+    EXPECT_TRUE(pipepp_test::wait_for_message(received2)) << "TLS publish after restart should work";
+
+    pub2.disconnect();
+    sub2.disconnect();
+}
