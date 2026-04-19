@@ -1,75 +1,40 @@
 #include <gtest/gtest.h>
-#include <pipepp/mqtt/mqtt_source.hpp>
-#include <pipepp/core/uri.hpp>
-#include <atomic>
-#include <chrono>
-#include <thread>
-#include <cstdlib>
+#include "test_helpers.hpp"
 #include <cstdio>
 
-#ifndef PIPEPP_MQTT_TEST_BROKER
-#define PIPEPP_MQTT_TEST_BROKER "localhost"
-#endif
-#ifndef PIPEPP_MQTT_TEST_PORT
-#define PIPEPP_MQTT_TEST_PORT 1883
-#endif
-
-using namespace pipepp::mqtt;
-using namespace pipepp::core;
-
-static std::string broker_uri() {
-    return "mqtt://" PIPEPP_MQTT_TEST_BROKER ":" +
-           std::to_string(PIPEPP_MQTT_TEST_PORT);
-}
-
-static std::string unique_topic(const char* suffix) {
-    return std::string("pipepp-will-test/") +
-           std::to_string(::getpid()) + "/" +
-           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-           "/" + suffix;
-}
-
-static bool broker_is_running() {
-    return system("pgrep -x mosquitto > /dev/null 2>&1") == 0;
-}
-
-static void start_broker() {
-    if (!broker_is_running()) {
-        system("mosquitto -c /etc/mosquitto/mosquitto.conf -d 2>/dev/null || true");
-        for (int i = 0; i < 50 && !broker_is_running(); ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+static std::string shell_escape(const std::string& s) {
+    std::string r = "'";
+    for (char c : s) {
+        if (c == '\'') r += "'\\''";
+        else r += c;
     }
+    r += "'";
+    return r;
 }
 
-static auto try_connect(mqtt_source<mqtt_default_config>& src) -> bool {
-    auto uid = std::to_string(reinterpret_cast<uintptr_t>(&src));
-    src.set_client_id(("will-" + uid).c_str());
-    auto uri = basic_uri<mqtt_default_config>::parse(broker_uri());
-    auto r = src.connect(uri.view());
-    return r.has_value();
-}
-
-static auto try_connect_with_retry(mqtt_source<mqtt_default_config>& src, int retries = 3) -> bool {
-    for (int i = 0; i < retries; ++i) {
-        start_broker();
-        if (try_connect(src)) return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    return try_connect(src);
-}
+class temp_file_guard {
+public:
+    explicit temp_file_guard(std::string path)
+        : path_(std::move(path)) {}
+    ~temp_file_guard() { unlink(path_.c_str()); }
+    const std::string& path() const { return path_; }
+    temp_file_guard(const temp_file_guard&) = delete;
+    temp_file_guard& operator=(const temp_file_guard&) = delete;
+private:
+    std::string path_;
+};
 
 static std::string capture_cmd(const std::string& cmd, int timeout_ms) {
-    std::string tmpf = "/tmp/will_" + std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt";
+    temp_file_guard tmpf("/tmp/will_" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
     std::string full = "timeout " + std::to_string(timeout_ms / 1000) +
-        " bash -c '" + cmd + "' > " + tmpf + " 2>/dev/null";
+        " bash -c " + shell_escape(cmd) + " > " + tmpf.path() + " 2>/dev/null";
     system(full.c_str());
-    FILE* f = fopen(tmpf.c_str(), "r");
+    FILE* f = fopen(tmpf.path().c_str(), "r");
     if (!f) return "";
     char buf[4096] = {};
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
-    unlink(tmpf.c_str());
     return std::string(buf, n);
 }
 
@@ -82,33 +47,33 @@ static std::string test_will_delivery(const std::string& will_topic,
     std::string retain_flag = retain ? " --will-retain " : " ";
 
     std::string cmd =
-        "rm -f " + output_file + "; "
+        "rm -f " + shell_escape(output_file) + "; "
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '" + will_topic + "' -C 1 -W 10 > " + output_file + " 2>/dev/null & "
+        " -t " + shell_escape(will_topic) + " -C 1 -W 10 > " + shell_escape(output_file) + " 2>/dev/null & "
         "SUB_PID=$!; "
         "sleep 0.5; "
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '__will_keepalive_" + client_id + "__' "
-        " --will-topic '" + will_topic + "' "
-        " --will-payload '" + will_payload + "' " +
+        " -t " + shell_escape("__will_keepalive_" + client_id + "__") +
+        " --will-topic " + shell_escape(will_topic) +
+        " --will-payload " + shell_escape(will_payload) +
         retain_flag +
-        " -i '" + client_id + "' "
+        " -i " + shell_escape(client_id) +
         " -W 30 & "
         "WILL_PID=$!; "
         "sleep 1; "
         "kill -9 $WILL_PID 2>/dev/null; "
         "wait $WILL_PID 2>/dev/null; "
         "wait $SUB_PID 2>/dev/null; "
-        "cat " + output_file;
+        "cat " + shell_escape(output_file);
 
     return capture_cmd(cmd, 15000);
 }
 
 TEST(MqttWillTest, WillMessageDeliveredOnUncleanDisconnect) {
-    start_broker();
-    auto will_topic = unique_topic("will/notify");
+    pipepp_test::start_broker();
+    auto will_topic = pipepp_test::unique_topic("pipepp-will-test/", "will/notify");
     std::string will_payload = "WILL_NOTIFY_12345";
 
     auto result = test_will_delivery(will_topic, will_payload);
@@ -117,8 +82,8 @@ TEST(MqttWillTest, WillMessageDeliveredOnUncleanDisconnect) {
 }
 
 TEST(MqttWillTest, WillMessageWithRetained) {
-    start_broker();
-    auto will_topic = unique_topic("will/retained");
+    pipepp_test::start_broker();
+    auto will_topic = pipepp_test::unique_topic("pipepp-will-test/", "will/retained");
 
     auto result = test_will_delivery(will_topic, "retained_will", true);
     EXPECT_FALSE(result.empty()) << "Retained will message was not delivered";
@@ -126,19 +91,19 @@ TEST(MqttWillTest, WillMessageWithRetained) {
     auto retained = capture_cmd(
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '" + will_topic + "' -C 1 -W 2", 5000);
+        " -t " + shell_escape(will_topic) + " -C 1 -W 2", 5000);
     EXPECT_FALSE(retained.empty()) << "Retained will should still be available after disconnect";
 }
 
 TEST(MqttWillTest, NoWillWhenNotSet) {
-    start_broker();
-    auto topic = unique_topic("will/notset");
+    pipepp_test::start_broker();
+    auto topic = pipepp_test::unique_topic("pipepp-will-test/", "will/notset");
 
     mqtt_source<mqtt_default_config> no_will_src;
-    ASSERT_TRUE(try_connect_with_retry(no_will_src));
+    ASSERT_TRUE(pipepp_test::try_connect_with_retry(no_will_src));
 
     mqtt_source<mqtt_default_config> monitor;
-    ASSERT_TRUE(try_connect_with_retry(monitor));
+    ASSERT_TRUE(pipepp_test::try_connect_with_retry(monitor));
 
     std::atomic<bool> received{false};
     monitor.set_message_callback([&](const message_view&) { received.store(true); });
@@ -154,8 +119,8 @@ TEST(MqttWillTest, NoWillWhenNotSet) {
 }
 
 TEST(MqttWillTest, WillPayloadPreserved) {
-    start_broker();
-    auto will_topic = unique_topic("will/payload");
+    pipepp_test::start_broker();
+    auto will_topic = pipepp_test::unique_topic("pipepp-will-test/", "will/payload");
     std::string will_payload = "PAYLOAD_5_BYTES_ABCDE";
 
     auto result = test_will_delivery(will_topic, will_payload);

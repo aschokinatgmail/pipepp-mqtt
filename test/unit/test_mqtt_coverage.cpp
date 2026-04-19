@@ -53,14 +53,18 @@ static void exercise_all() {
     auto sr = src.subscribe(pub_topic.c_str(), 0);
     EXPECT_TRUE(sr.has_value());
 
+    bool cb_called = false;
+    src.set_message_callback([&](const message_view&) { cb_called = true; });
+
     std::byte pub_data[] = {std::byte{0x42}};
     auto pr = src.publish(pub_topic.c_str(), pub_data, 0);
     EXPECT_TRUE(pr.has_value());
 
-    bool cb_called = false;
-    src.set_message_callback([&](const message_view&) { cb_called = true; });
-
-    src.poll();
+    for (int i = 0; i < 20 && !cb_called; ++i) {
+        src.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_TRUE(cb_called);
 
     auto dr = src.disconnect();
     EXPECT_TRUE(dr.has_value());

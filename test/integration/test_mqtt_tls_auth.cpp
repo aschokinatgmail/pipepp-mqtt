@@ -1,64 +1,9 @@
 #include <gtest/gtest.h>
-#include <pipepp/mqtt/mqtt_source.hpp>
-#include <pipepp/core/uri.hpp>
-#include <atomic>
-#include <chrono>
-#include <thread>
-
-#ifndef PIPEPP_MQTT_TEST_BROKER
-#define PIPEPP_MQTT_TEST_BROKER "localhost"
-#endif
-#ifndef PIPEPP_MQTT_TEST_TLS_PORT
-#define PIPEPP_MQTT_TEST_TLS_PORT 8883
-#endif
-#ifndef PIPEPP_MQTT_TEST_CA_CERT
-#define PIPEPP_MQTT_TEST_CA_CERT "/etc/mosquitto/certs/ca.crt"
-#endif
-
-using namespace pipepp::mqtt;
-using namespace pipepp::core;
-
-static std::string tls_broker_uri() {
-    return std::string("mqtts://") + PIPEPP_MQTT_TEST_BROKER + ":" +
-           std::to_string(PIPEPP_MQTT_TEST_TLS_PORT);
-}
-
-static std::string unique_topic(const char* suffix) {
-    return std::string("pipepp-tls-test/") +
-           std::to_string(::getpid()) + "/" +
-           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-           "/" + suffix;
-}
-
-static auto try_tls_connect(mqtt_source<mqtt_default_config>& src,
-                            const char* user = "pipepp_test",
-                            const char* pass = "pipepp_test_pw") -> bool {
-    auto uid = std::to_string(reinterpret_cast<uintptr_t>(&src));
-    src.set_client_id(("tls-" + uid).c_str());
-    src.set_username(user);
-    src.set_password(pass);
-    src.set_ssl(PIPEPP_MQTT_TEST_CA_CERT, "", "");
-    auto uri = basic_uri<mqtt_default_config>::parse(tls_broker_uri());
-    auto r = src.connect(uri.view());
-    return r.has_value();
-}
-
-static auto try_tls_connect_consumer(mqtt_source<mqtt_default_consumer_config>& src,
-                                      const char* user = "pipepp_test",
-                                      const char* pass = "pipepp_test_pw") -> bool {
-    auto uid = std::to_string(reinterpret_cast<uintptr_t>(&src));
-    src.set_client_id(("tls-c-" + uid).c_str());
-    src.set_username(user);
-    src.set_password(pass);
-    src.set_ssl(PIPEPP_MQTT_TEST_CA_CERT, "", "");
-    auto uri = basic_uri<mqtt_default_consumer_config>::parse(tls_broker_uri());
-    auto r = src.connect(uri.view());
-    return r.has_value();
-}
+#include "test_helpers.hpp"
 
 TEST(MqttTlsAuthTest, ConnectWithTlsAndAuth) {
     mqtt_source<mqtt_default_config> src;
-    ASSERT_TRUE(try_tls_connect(src)) << "TLS+auth connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(src)) << "TLS+auth connect failed";
     EXPECT_TRUE(src.is_connected());
     src.disconnect();
     EXPECT_FALSE(src.is_connected());
@@ -66,20 +11,20 @@ TEST(MqttTlsAuthTest, ConnectWithTlsAndAuth) {
 
 TEST(MqttTlsAuthTest, ConnectWithTlsWrongPasswordFails) {
     mqtt_source<mqtt_default_config> src;
-    EXPECT_FALSE(try_tls_connect(src, "pipepp_test", "wrong_password"));
+    EXPECT_FALSE(pipepp_test::try_tls_connect(src, "tls", "pipepp_test", "wrong_password"));
     EXPECT_FALSE(src.is_connected());
 }
 
 TEST(MqttTlsAuthTest, ConnectWithTlsWrongUsernameFails) {
     mqtt_source<mqtt_default_config> src;
-    EXPECT_FALSE(try_tls_connect(src, "wrong_user", "pipepp_test_pw"));
+    EXPECT_FALSE(pipepp_test::try_tls_connect(src, "tls", "wrong_user", "pipepp_test_pw"));
     EXPECT_FALSE(src.is_connected());
 }
 
 TEST(MqttTlsAuthTest, ConnectWithTlsNoAuthFails) {
     mqtt_source<mqtt_default_config> src;
     src.set_ssl(PIPEPP_MQTT_TEST_CA_CERT, "", "");
-    auto uri = basic_uri<mqtt_default_config>::parse(tls_broker_uri());
+    auto uri = basic_uri<mqtt_default_config>::parse(pipepp_test::tls_broker_uri());
     auto r = src.connect(uri.view());
     EXPECT_FALSE(r.has_value());
     EXPECT_FALSE(src.is_connected());
@@ -88,10 +33,10 @@ TEST(MqttTlsAuthTest, ConnectWithTlsNoAuthFails) {
 TEST(MqttTlsAuthTest, PubSubOverTlsCallbackMode) {
     mqtt_source<mqtt_default_config> pub;
     mqtt_source<mqtt_default_config> sub;
-    ASSERT_TRUE(try_tls_connect(pub)) << "Publisher TLS connect failed";
-    ASSERT_TRUE(try_tls_connect(sub)) << "Subscriber TLS connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub)) << "Publisher TLS connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub)) << "Subscriber TLS connect failed";
 
-    auto topic = unique_topic("tls-callback");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-callback");
     std::atomic<bool> received{false};
     std::string received_topic;
     std::vector<std::byte> received_payload;
@@ -110,9 +55,7 @@ TEST(MqttTlsAuthTest, PubSubOverTlsCallbackMode) {
     auto pr = pub.publish(topic, payload, 1);
     ASSERT_TRUE(pr.has_value());
 
-    for (int i = 0; i < 50 && !received.load(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    ASSERT_TRUE(received.load()) << "Message not received over TLS";
+    ASSERT_TRUE(pipepp_test::wait_for_message(received)) << "Message not received over TLS";
     EXPECT_EQ(received_topic, topic);
     EXPECT_EQ(received_payload.size(), 4u);
     EXPECT_EQ(received_payload[0], std::byte{0xDE});
@@ -125,10 +68,10 @@ TEST(MqttTlsAuthTest, PubSubOverTlsCallbackMode) {
 TEST(MqttTlsAuthTest, PubSubOverTlsConsumerMode) {
     mqtt_source<mqtt_default_consumer_config> pub;
     mqtt_source<mqtt_default_consumer_config> sub;
-    ASSERT_TRUE(try_tls_connect_consumer(pub)) << "Publisher TLS connect failed";
-    ASSERT_TRUE(try_tls_connect_consumer(sub)) << "Subscriber TLS connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub, "tls-c")) << "Publisher TLS connect failed";
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub, "tls-c")) << "Subscriber TLS connect failed";
 
-    auto topic = unique_topic("tls-consumer");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-consumer");
     std::atomic<bool> received{false};
 
     sub.set_message_callback([&](const message_view&) {
@@ -156,10 +99,10 @@ TEST(MqttTlsAuthTest, PubSubOverTlsConsumerMode) {
 TEST(MqttTlsAuthTest, QoS1OverTls) {
     mqtt_source<mqtt_default_config> pub;
     mqtt_source<mqtt_default_config> sub;
-    ASSERT_TRUE(try_tls_connect(pub));
-    ASSERT_TRUE(try_tls_connect(sub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub));
 
-    auto topic = unique_topic("tls-qos1");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-qos1");
     std::atomic<bool> received{false};
     sub.set_message_callback([&](const message_view&) { received.store(true); });
     sub.subscribe(topic, 1);
@@ -169,9 +112,7 @@ TEST(MqttTlsAuthTest, QoS1OverTls) {
     auto pr = pub.publish(topic, p, 1);
     ASSERT_TRUE(pr.has_value());
 
-    for (int i = 0; i < 50 && !received.load(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    EXPECT_TRUE(received.load());
+    EXPECT_TRUE(pipepp_test::wait_for_message(received));
 
     pub.disconnect();
     sub.disconnect();
@@ -180,10 +121,10 @@ TEST(MqttTlsAuthTest, QoS1OverTls) {
 TEST(MqttTlsAuthTest, QoS2OverTls) {
     mqtt_source<mqtt_default_config> pub;
     mqtt_source<mqtt_default_config> sub;
-    ASSERT_TRUE(try_tls_connect(pub));
-    ASSERT_TRUE(try_tls_connect(sub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub));
 
-    auto topic = unique_topic("tls-qos2");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-qos2");
     std::atomic<bool> received{false};
     sub.set_message_callback([&](const message_view&) { received.store(true); });
     sub.subscribe(topic, 2);
@@ -193,9 +134,7 @@ TEST(MqttTlsAuthTest, QoS2OverTls) {
     auto pr = pub.publish(topic, p, 2);
     ASSERT_TRUE(pr.has_value());
 
-    for (int i = 0; i < 50 && !received.load(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    EXPECT_TRUE(received.load());
+    EXPECT_TRUE(pipepp_test::wait_for_message(received));
 
     pub.disconnect();
     sub.disconnect();
@@ -204,10 +143,10 @@ TEST(MqttTlsAuthTest, QoS2OverTls) {
 TEST(MqttTlsAuthTest, MultipleMessagesOverTls) {
     mqtt_source<mqtt_default_config> pub;
     mqtt_source<mqtt_default_config> sub;
-    ASSERT_TRUE(try_tls_connect(pub));
-    ASSERT_TRUE(try_tls_connect(sub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub));
 
-    auto topic = unique_topic("tls-multi");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-multi");
     std::atomic<int> count{0};
     sub.set_message_callback([&](const message_view&) { count.fetch_add(1); });
     sub.subscribe(topic, 1);
@@ -219,8 +158,7 @@ TEST(MqttTlsAuthTest, MultipleMessagesOverTls) {
         ASSERT_TRUE(pr.has_value());
     }
 
-    for (int i = 0; i < 50 && count.load() < 10; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_TRUE(pipepp_test::wait_for_count(count, 10));
     EXPECT_EQ(count.load(), 10);
 
     pub.disconnect();
@@ -230,10 +168,10 @@ TEST(MqttTlsAuthTest, MultipleMessagesOverTls) {
 TEST(MqttTlsAuthTest, LargePayloadOverTls) {
     mqtt_source<mqtt_default_config> pub;
     mqtt_source<mqtt_default_config> sub;
-    ASSERT_TRUE(try_tls_connect(pub));
-    ASSERT_TRUE(try_tls_connect(sub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(pub));
+    ASSERT_TRUE(pipepp_test::try_tls_connect(sub));
 
-    auto topic = unique_topic("tls-large");
+    auto topic = pipepp_test::unique_topic("pipepp-tls-test/", "tls-large");
     std::atomic<bool> received{false};
     std::size_t received_size = 0;
     sub.set_message_callback([&](const message_view& mv) {
@@ -247,9 +185,7 @@ TEST(MqttTlsAuthTest, LargePayloadOverTls) {
     auto pr = pub.publish(topic, large, 1);
     ASSERT_TRUE(pr.has_value());
 
-    for (int i = 0; i < 50 && !received.load(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    ASSERT_TRUE(received.load());
+    ASSERT_TRUE(pipepp_test::wait_for_message(received));
     EXPECT_EQ(received_size, 4096u);
 
     pub.disconnect();
