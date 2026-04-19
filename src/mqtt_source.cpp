@@ -17,6 +17,10 @@ namespace paho = ::mqtt;
 
 namespace pipepp::mqtt {
 
+using pipepp::core::fixed_string;
+using pipepp::core::message_callback;
+using pipepp::core::message_view;
+
 namespace {
 
 int parse_int(std::string_view sv) {
@@ -29,13 +33,25 @@ int parse_int(std::string_view sv) {
 }
 
 std::string_view query_param(std::string_view query, std::string_view key) {
-    auto pos = query.find(key);
-    if (pos == std::string_view::npos) return {};
-    auto val_start = pos + key.size();
-    if (val_start >= query.size() || query[val_start] != '=') return {};
-    ++val_start;
-    auto val_end = query.find('&', val_start);
-    return query.substr(val_start, val_end == std::string_view::npos ? std::string_view::npos : val_end - val_start);
+    std::size_t pos = 0;
+    while (pos < query.size()) {
+        auto found = query.find(key, pos);
+        if (found == std::string_view::npos) return {};
+        auto before = (found == 0) ? '?' : query[found - 1];
+        if (before != '?' && before != '&') {
+            pos = found + 1;
+            continue;
+        }
+        auto after_key = found + key.size();
+        if (after_key >= query.size() || query[after_key] != '=') {
+            pos = found + 1;
+            continue;
+        }
+        auto val_start = after_key + 1;
+        auto val_end = query.find('&', val_start);
+        return query.substr(val_start, val_end == std::string_view::npos ? std::string_view::npos : val_end - val_start);
+    }
+    return {};
 }
 
 }
@@ -277,9 +293,12 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
         auto conn_opts = paho::connect_options_builder()
             .keep_alive_interval(std::chrono::seconds(keepalive))
             .clean_session(clean_session)
-            .automatic_reconnect(std::chrono::seconds(s->reconnect_min_s),
-                                 std::chrono::seconds(s->reconnect_max_s))
             .finalize();
+
+        if (s->auto_reconnect) {
+            conn_opts.set_automatic_reconnect(std::chrono::seconds(s->reconnect_min_s),
+                                              std::chrono::seconds(s->reconnect_max_s));
+        }
 
         if (mqtt_version == 5) {
             conn_opts.set_mqtt_version(5);
@@ -602,6 +621,13 @@ void mqtt_source<Config>::set_ssl(std::string_view trust_store, std::string_view
     s->ssl_trust_store.from_or_truncate(trust_store);
     s->ssl_key_store.from_or_truncate(key_store);
     s->ssl_private_key.from_or_truncate(private_key);
+}
+
+template<typename Config>
+void mqtt_source<Config>::set_ssl_verify(bool enable) {
+    auto* s = static_cast<mqtt_impl<Config>*>(impl_);
+    if (!s) return;
+    s->ssl_verify = enable;
 }
 
 template<typename Config>
