@@ -4,6 +4,14 @@
 #include <chrono>
 #include <cstdint>
 
+#ifndef PIPEPP_MQTT_TEST_BROKER
+#define PIPEPP_MQTT_TEST_BROKER "bms-logging-server.local"
+#endif
+
+#ifndef PIPEPP_MQTT_TEST_PORT
+#define PIPEPP_MQTT_TEST_PORT 1883
+#endif
+
 using namespace pipepp::mqtt;
 using namespace pipepp::core;
 
@@ -30,6 +38,19 @@ static std::string unique_cov_topic(const char* suffix) {
 
 
 template<typename Config>
+static std::string make_broker_uri() {
+    return "mqtt://" PIPEPP_MQTT_TEST_BROKER ":" +
+           std::to_string(PIPEPP_MQTT_TEST_PORT);
+}
+
+template<typename Config>
+static bool try_connect(mqtt_source<Config>& src) {
+    auto uri = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r = src.connect(uri.view());
+    return r.has_value();
+}
+
+template<typename Config>
 static void exercise_all() {
     mqtt_source<Config> src;
     EXPECT_FALSE(src.is_connected());
@@ -46,6 +67,7 @@ static void exercise_all() {
     std::byte will_data[] = {std::byte{0x01}};
     src.set_will(will_topic.c_str(), will_data, 1, true);
 
+#ifdef PIPEPP_MQTT_STUB
     auto r = src.connect();
     ASSERT_TRUE(r.has_value());
     EXPECT_TRUE(src.is_connected());
@@ -70,6 +92,30 @@ static void exercise_all() {
     auto dr = src.disconnect();
     EXPECT_TRUE(dr.has_value());
     EXPECT_FALSE(src.is_connected());
+#else
+    auto uri = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r = src.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable for coverage test";
+    }
+    EXPECT_TRUE(src.is_connected());
+
+    auto sr = src.subscribe("cov/topic", 0);
+    EXPECT_TRUE(sr.has_value());
+
+    std::byte pub_data[] = {std::byte{0x42}};
+    auto pr = src.publish("cov/topic", pub_data, 0);
+    EXPECT_TRUE(pr.has_value());
+
+    bool cb_called = false;
+    src.set_message_callback([&](const message_view&) { cb_called = true; });
+
+    src.poll();
+
+    auto dr = src.disconnect();
+    EXPECT_TRUE(dr.has_value());
+    EXPECT_FALSE(src.is_connected());
+#endif
 
     mqtt_source<Config> src2(std::move(src));
     EXPECT_FALSE(src2.is_connected());
@@ -82,13 +128,31 @@ static void exercise_all() {
 template<typename Config>
 static void exercise_connected_destructor() {
     mqtt_source<Config> src;
-    connect_to_broker(src);
+#ifdef PIPEPP_MQTT_STUB
+    src.connect();
+    EXPECT_TRUE(src.is_connected());
+#else
+    auto uri = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r = src.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+    EXPECT_TRUE(src.is_connected());
+#endif
 }
 
 template<typename Config>
 static void exercise_valid_qos() {
     mqtt_source<Config> src;
-    connect_to_broker(src);
+#ifdef PIPEPP_MQTT_STUB
+    src.connect();
+#else
+    auto uri = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r = src.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
 
     EXPECT_TRUE(src.subscribe("qos/0", 0).has_value());
     EXPECT_TRUE(src.subscribe("qos/1", 1).has_value());
@@ -165,9 +229,25 @@ TEST(MqttCoverage, AllErrorMessages) {
 template<typename Config>
 static void exercise_move_assign_connected_dst() {
     mqtt_source<Config> src1;
-    connect_to_broker(src1);
+#ifdef PIPEPP_MQTT_STUB
+    src1.connect();
+#else
+    auto uri1 = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r1 = src1.connect(uri1.view());
+    if (!r1.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
     mqtt_source<Config> src2;
-    connect_to_broker(src2);
+#ifdef PIPEPP_MQTT_STUB
+    src2.connect();
+#else
+    auto uri2 = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r2 = src2.connect(uri2.view());
+    if (!r2.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
     EXPECT_TRUE(src2.is_connected());
     src2 = std::move(src1);
     EXPECT_TRUE(src2.is_connected());
@@ -175,7 +255,15 @@ static void exercise_move_assign_connected_dst() {
 
 TEST(MqttCoverage, MoveAssignConnectedDefault) {
     mqtt_source<mqtt_default_config> src1;
-    connect_to_broker(src1);
+#ifdef PIPEPP_MQTT_STUB
+    src1.connect();
+#else
+    auto uri = basic_uri<mqtt_default_config>::parse(make_broker_uri<mqtt_default_config>());
+    auto r = src1.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
     EXPECT_TRUE(src1.is_connected());
     mqtt_source<mqtt_default_config> src2;
     src2 = std::move(src1);
@@ -184,7 +272,15 @@ TEST(MqttCoverage, MoveAssignConnectedDefault) {
 
 TEST(MqttCoverage, MoveAssignConnectedEmbedded) {
     mqtt_source<mqtt_embedded_config> src1;
-    connect_to_broker(src1);
+#ifdef PIPEPP_MQTT_STUB
+    src1.connect();
+#else
+    auto uri = basic_uri<mqtt_embedded_config>::parse(make_broker_uri<mqtt_embedded_config>());
+    auto r = src1.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
     mqtt_source<mqtt_embedded_config> src2;
     src2 = std::move(src1);
     EXPECT_TRUE(src2.is_connected());
@@ -209,7 +305,15 @@ TEST(MqttCoverage, MoveAssignConnectedDstEmbeddedConsumer) {
 template<typename Config>
 static void exercise_self_assign() {
     mqtt_source<Config> src;
-    connect_to_broker(src);
+#ifdef PIPEPP_MQTT_STUB
+    src.connect();
+#else
+    auto uri = basic_uri<Config>::parse(make_broker_uri<Config>());
+    auto r = src.connect(uri.view());
+    if (!r.has_value()) {
+        GTEST_SKIP() << "Broker unreachable";
+    }
+#endif
     src = std::move(src);
 }
 
