@@ -29,7 +29,7 @@ endif()
 
 find_package(PahoMqttCpp QUIET)
 if(PahoMqttCpp_FOUND)
-    target_link_libraries(pipepp-mqtt PRIVATE paho-mqtt3a paho-mqttpp3)
+    target_link_libraries(pipepp-mqtt PRIVATE paho-mqtt3as paho-mqttpp3)
     target_compile_definitions(pipepp-mqtt PRIVATE PIPEPP_MQTT_HAS_PAHO_CPP=1)
 else()
     message(WARNING "Paho MQTT not found. pipepp-mqtt will have stub implementations.")
@@ -53,6 +53,8 @@ install(EXPORT pipepp-mqtt-targets
 
 set(PIPEPP_MQTT_TEST_BROKER "bms-logging-server.local" CACHE STRING "MQTT broker for integration tests")
 set(PIPEPP_MQTT_TEST_PORT 1883 CACHE STRING "MQTT broker port for integration tests")
+set(PIPEPP_MQTT_TEST_TLS_PORT 8883 CACHE STRING "MQTT TLS broker port for integration tests")
+set(PIPEPP_MQTT_TEST_CA_CERT "/etc/mosquitto/certs/ca.crt" CACHE STRING "CA certificate path for TLS integration tests")
 
 if(PIPEPP_MQTT_BUILD_TESTS)
     enable_testing()

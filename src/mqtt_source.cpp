@@ -1,7 +1,9 @@
 #include <pipepp/mqtt/mqtt_source.hpp>
 
 #include <atomic>
+#include <climits>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -27,7 +29,11 @@ int parse_int(std::string_view sv) {
     int result = 0;
     for (char c : sv) {
         if (c < '0' || c > '9') break;
-        result = result * 10 + (c - '0');
+        int digit = c - '0';
+        if (result > (INT_MAX - digit) / 10) {
+            return INT_MAX;
+        }
+        result = result * 10 + digit;
     }
     return result;
 }
@@ -67,6 +73,7 @@ struct mqtt_impl {
 
     std::atomic<bool> connected{false};
     bool callback_installed = false;
+    std::mutex callback_mutex;
 
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
     paho::async_client* client = nullptr;
@@ -263,16 +270,20 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
         if (s->callback_installed) {
             if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
                 auto* cb_ptr = &s->callback;
-                cli->set_message_callback([cb_ptr](paho::const_message_ptr msg) {
-                    if (msg && *cb_ptr) {
-                        auto topic = std::string_view(msg->get_topic());
-                        auto& payload_ref = msg->get_payload_ref();
-                        auto payload = std::span<const std::byte>(
-                            reinterpret_cast<const std::byte*>(payload_ref.data()),
-                            payload_ref.size());
-                        auto qos = msg->get_qos();
-                        pipepp::core::message_view mv(topic, payload, static_cast<uint8_t>(qos));
-                        (*cb_ptr)(mv);
+                auto* mtx_ptr = &s->callback_mutex;
+                cli->set_message_callback([cb_ptr, mtx_ptr](paho::const_message_ptr msg) {
+                    if (msg) {
+                        std::lock_guard<std::mutex> lock(*mtx_ptr);
+                        if (*cb_ptr) {
+                            auto topic = std::string_view(msg->get_topic());
+                            auto& payload_ref = msg->get_payload_ref();
+                            auto payload = std::span<const std::byte>(
+                                reinterpret_cast<const std::byte*>(payload_ref.data()),
+                                payload_ref.size());
+                            auto qos = msg->get_qos();
+                            pipepp::core::message_view mv(topic, payload, static_cast<uint8_t>(qos));
+                            (*cb_ptr)(mv);
+                        }
                     }
                 });
             }
@@ -325,19 +336,20 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
             conn_opts.set_will_message(will_msg);
         }
 
+        std::string ts_str, ks_str, pk_str;
         if (s->ssl_enabled) {
             paho::ssl_options ssl_opts;
             if (!s->ssl_trust_store.empty()) {
-                auto ts = std::string(static_cast<std::string_view>(s->ssl_trust_store));
-                ssl_opts.set_trust_store(ts);
+                ts_str = std::string(static_cast<std::string_view>(s->ssl_trust_store));
+                ssl_opts.set_trust_store(ts_str);
             }
             if (!s->ssl_key_store.empty()) {
-                auto ks = std::string(static_cast<std::string_view>(s->ssl_key_store));
-                ssl_opts.set_key_store(ks);
+                ks_str = std::string(static_cast<std::string_view>(s->ssl_key_store));
+                ssl_opts.set_key_store(ks_str);
             }
             if (!s->ssl_private_key.empty()) {
-                auto pk = std::string(static_cast<std::string_view>(s->ssl_private_key));
-                ssl_opts.set_private_key(pk);
+                pk_str = std::string(static_cast<std::string_view>(s->ssl_private_key));
+                ssl_opts.set_private_key(pk_str);
             }
             ssl_opts.set_enable_server_cert_auth(s->ssl_verify);
             conn_opts.set_ssl(std::move(ssl_opts));
@@ -429,15 +441,16 @@ pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int 
             pipepp::core::unexpect,
             pipepp::core::make_unexpected(pipepp::core::error_code::not_connected)};
     }
+    if (!s->add_subscription(topic, qos)) {
+        return pipepp::core::result{
+            pipepp::core::unexpect,
+            pipepp::core::make_unexpected(pipepp::core::error_code::capacity_exceeded)};
+    }
     try {
         s->client->subscribe(std::string(topic), qos)->wait_for(std::chrono::seconds(5));
-        if (!s->add_subscription(topic, qos)) {
-            return pipepp::core::result{
-                pipepp::core::unexpect,
-                pipepp::core::make_unexpected(pipepp::core::error_code::capacity_exceeded)};
-        }
         return {};
     } catch (const paho::exception&) {
+        --s->sub_count;
         return pipepp::core::result{
             pipepp::core::unexpect,
             pipepp::core::make_unexpected(pipepp::core::error_code::connection_failed)};
@@ -506,22 +519,29 @@ template<typename Config>
 void mqtt_source<Config>::set_message_callback(pipepp::core::message_callback<Config> cb) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
     if (!s) return;
-    s->callback = std::move(cb);
+    {
+        std::lock_guard<std::mutex> lock(s->callback_mutex);
+        s->callback = std::move(cb);
+    }
     s->callback_installed = true;
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
     if (s->client) {
         auto* cb_ptr = &s->callback;
+        auto* mtx_ptr = &s->callback_mutex;
         if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_callback_tag>) {
-            s->client->set_message_callback([cb_ptr](paho::const_message_ptr msg) {
-                if (msg && *cb_ptr) {
-                    auto topic = std::string_view(msg->get_topic());
-                    auto& payload_ref = msg->get_payload_ref();
-                    auto payload = std::span<const std::byte>(
-                        reinterpret_cast<const std::byte*>(payload_ref.data()),
-                        payload_ref.size());
-                    auto qos = msg->get_qos();
-                    pipepp::core::message_view mv(topic, payload, static_cast<uint8_t>(qos));
-                    (*cb_ptr)(mv);
+            s->client->set_message_callback([cb_ptr, mtx_ptr](paho::const_message_ptr msg) {
+                if (msg) {
+                    std::lock_guard<std::mutex> lock(*mtx_ptr);
+                    if (*cb_ptr) {
+                        auto topic = std::string_view(msg->get_topic());
+                        auto& payload_ref = msg->get_payload_ref();
+                        auto payload = std::span<const std::byte>(
+                            reinterpret_cast<const std::byte*>(payload_ref.data()),
+                            payload_ref.size());
+                        auto qos = msg->get_qos();
+                        pipepp::core::message_view mv(topic, payload, static_cast<uint8_t>(qos));
+                        (*cb_ptr)(mv);
+                    }
                 }
             });
         }
@@ -545,7 +565,10 @@ void mqtt_source<Config>::poll() {
                             payload_ref.size());
                         auto qos = msg->get_qos();
                         pipepp::core::message_view mv(topic, payload, static_cast<uint8_t>(qos));
-                        s->callback(mv);
+                        {
+                            std::lock_guard<std::mutex> lock(s->callback_mutex);
+                            s->callback(mv);
+                        }
                     }
                 }
             } catch (...) {}
@@ -553,6 +576,8 @@ void mqtt_source<Config>::poll() {
     } else {
         std::this_thread::yield();
     }
+#else
+    std::this_thread::yield();
 #endif
 }
 
@@ -590,6 +615,9 @@ template<typename Config>
 void mqtt_source<Config>::set_will(std::string_view topic, std::span<const std::byte> payload, int qos, bool retained) {
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
     if (!s) return;
+    if (qos < 0 || qos > 2) {
+        qos = (qos < 0) ? 0 : 2;
+    }
     s->will_topic.from_or_truncate(topic);
     auto copy_len = payload.size() < Config::max_payload_len ? payload.size() : Config::max_payload_len;
     std::memcpy(s->will_payload, payload.data(), copy_len);
