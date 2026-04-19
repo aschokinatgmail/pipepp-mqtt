@@ -28,6 +28,9 @@ gtest_discover_tests(pipepp-mqtt-unit-tests TEST_LIST UNIT_TESTS)
 add_executable(pipepp-mqtt-integration-tests
     integration/test_mqtt_connect.cpp
     integration/test_mqtt_pubsub.cpp
+    integration/test_mqtt_tls_auth.cpp
+    integration/test_mqtt_reconnect.cpp
+    integration/test_mqtt_will.cpp
 )
 target_link_libraries(pipepp-mqtt-integration-tests PRIVATE pipepp-mqtt GTest::gtest_main Threads::Threads)
 target_include_directories(pipepp-mqtt-integration-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -39,5 +42,8 @@ endif()
 target_compile_definitions(pipepp-mqtt-integration-tests PRIVATE
     PIPEPP_MQTT_TEST_BROKER="${PIPEPP_MQTT_TEST_BROKER}"
     PIPEPP_MQTT_TEST_PORT=${PIPEPP_MQTT_TEST_PORT}
+    PIPEPP_MQTT_TEST_TLS_PORT=${PIPEPP_MQTT_TEST_TLS_PORT}
+    PIPEPP_MQTT_TEST_CA_CERT="${PIPEPP_MQTT_TEST_CA_CERT}"
 )
-gtest_discover_tests(pipepp-mqtt-integration-tests TEST_LIST INTEGRATION_TESTS)
+gtest_discover_tests(pipepp-mqtt-integration-tests TEST_LIST INTEGRATION_TESTS
+    PROPERTIES RUN_SERIAL TRUE)

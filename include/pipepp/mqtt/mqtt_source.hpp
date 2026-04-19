@@ -14,7 +14,6 @@
 #include <pipepp/core/uri.hpp>
 
 #include "mqtt_config.hpp"
-#include "mqtt_error.hpp"
 
 namespace pipepp::mqtt {
 
