@@ -1,0 +1,13 @@
+FROM fedora:42
+
+RUN dnf install -y \
+    cmake \
+    gcc-c++ \
+    paho-mqtt-devel \
+    paho-mqtt-cpp-devel \
+    gtest-devel \
+    && dnf clean all
+
+WORKDIR /build
+
+CMD ["bash"]
