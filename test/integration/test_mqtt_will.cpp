@@ -2,18 +2,39 @@
 #include "test_helpers.hpp"
 #include <cstdio>
 
+static std::string shell_escape(const std::string& s) {
+    std::string r = "'";
+    for (char c : s) {
+        if (c == '\'') r += "'\\''";
+        else r += c;
+    }
+    r += "'";
+    return r;
+}
+
+class temp_file_guard {
+public:
+    explicit temp_file_guard(std::string path)
+        : path_(std::move(path)) {}
+    ~temp_file_guard() { unlink(path_.c_str()); }
+    const std::string& path() const { return path_; }
+    temp_file_guard(const temp_file_guard&) = delete;
+    temp_file_guard& operator=(const temp_file_guard&) = delete;
+private:
+    std::string path_;
+};
+
 static std::string capture_cmd(const std::string& cmd, int timeout_ms) {
-    std::string tmpf = "/tmp/will_" + std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt";
+    temp_file_guard tmpf("/tmp/will_" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
     std::string full = "timeout " + std::to_string(timeout_ms / 1000) +
-        " bash -c '" + cmd + "' > " + tmpf + " 2>/dev/null";
+        " bash -c " + shell_escape(cmd) + " > " + tmpf.path() + " 2>/dev/null";
     system(full.c_str());
-    FILE* f = fopen(tmpf.c_str(), "r");
+    FILE* f = fopen(tmpf.path().c_str(), "r");
     if (!f) return "";
     char buf[4096] = {};
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
-    unlink(tmpf.c_str());
     return std::string(buf, n);
 }
 
@@ -26,26 +47,26 @@ static std::string test_will_delivery(const std::string& will_topic,
     std::string retain_flag = retain ? " --will-retain " : " ";
 
     std::string cmd =
-        "rm -f " + output_file + "; "
+        "rm -f " + shell_escape(output_file) + "; "
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '" + will_topic + "' -C 1 -W 10 > " + output_file + " 2>/dev/null & "
+        " -t " + shell_escape(will_topic) + " -C 1 -W 10 > " + shell_escape(output_file) + " 2>/dev/null & "
         "SUB_PID=$!; "
         "sleep 0.5; "
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '__will_keepalive_" + client_id + "__' "
-        " --will-topic '" + will_topic + "' "
-        " --will-payload '" + will_payload + "' " +
+        " -t " + shell_escape("__will_keepalive_" + client_id + "__") +
+        " --will-topic " + shell_escape(will_topic) +
+        " --will-payload " + shell_escape(will_payload) +
         retain_flag +
-        " -i '" + client_id + "' "
+        " -i " + shell_escape(client_id) +
         " -W 30 & "
         "WILL_PID=$!; "
         "sleep 1; "
         "kill -9 $WILL_PID 2>/dev/null; "
         "wait $WILL_PID 2>/dev/null; "
         "wait $SUB_PID 2>/dev/null; "
-        "cat " + output_file;
+        "cat " + shell_escape(output_file);
 
     return capture_cmd(cmd, 15000);
 }
@@ -70,7 +91,7 @@ TEST(MqttWillTest, WillMessageWithRetained) {
     auto retained = capture_cmd(
         "mosquitto_sub -h " PIPEPP_MQTT_TEST_BROKER
         " -p " + std::to_string(PIPEPP_MQTT_TEST_PORT) +
-        " -t '" + will_topic + "' -C 1 -W 2", 5000);
+        " -t " + shell_escape(will_topic) + " -C 1 -W 2", 5000);
     EXPECT_FALSE(retained.empty()) << "Retained will should still be available after disconnect";
 }
 
