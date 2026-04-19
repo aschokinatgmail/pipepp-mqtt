@@ -9,6 +9,8 @@
 #include <mqtt/async_client.h>
 #include <mqtt/connect_options.h>
 #include <mqtt/message.h>
+#include <mqtt/ssl_options.h>
+#include <mqtt/will_options.h>
 
 namespace paho = ::mqtt;
 #endif
@@ -31,6 +33,13 @@ std::string_view query_param(std::string_view query, std::string_view key) {
 
 template<typename Config>
 struct mqtt_impl {
+    mqtt_impl() = default;
+    ~mqtt_impl() = default;
+    mqtt_impl(const mqtt_impl&) = delete;
+    mqtt_impl& operator=(const mqtt_impl&) = delete;
+    mqtt_impl(mqtt_impl&&) = default;
+    mqtt_impl& operator=(mqtt_impl&&) = default;
+
 #ifdef PIPEPP_MQTT_HAS_PAHO_CPP
     paho::async_client* client = nullptr;
 #endif
@@ -57,6 +66,22 @@ struct mqtt_impl {
     int will_qos = 0;
     bool will_retained = false;
     bool has_will = false;
+
+    static constexpr std::size_t max_subscriptions = Config::max_subscriptions;
+    struct sub_entry {
+        fixed_string<Config::max_topic_len> topic{};
+        int qos = 0;
+    };
+    sub_entry subscriptions[max_subscriptions]{};
+    std::size_t sub_count = 0;
+
+    void add_subscription(std::string_view topic, int qos) {
+        if (sub_count < max_subscriptions) {
+            subscriptions[sub_count].topic.checked_from(topic);
+            subscriptions[sub_count].qos = qos;
+            ++sub_count;
+        }
+    }
 };
 
 template<typename Config>
@@ -166,6 +191,14 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
                                  std::chrono::seconds(s->reconnect_max_s))
             .finalize();
 
+        if (mqtt_version == 5) {
+            conn_opts.set_mqtt_version(5);
+        } else if (mqtt_version == 3) {
+            conn_opts.set_mqtt_version(3);
+        } else {
+            conn_opts.set_mqtt_version(4);
+        }
+
         if (!s->username.empty()) {
             auto u = std::string(static_cast<std::string_view>(s->username));
             conn_opts.set_user_name(paho::string_ref(u.data(), u.size()));
@@ -174,6 +207,45 @@ pipepp::core::result mqtt_source<Config>::connect(pipepp::core::uri_view uri) {
             auto pw = std::string(static_cast<std::string_view>(s->password));
             conn_opts.set_password(paho::binary_ref(pw.data(), pw.size()));
         }
+
+        if (s->has_will) {
+            auto will_msg = paho::make_message(
+                std::string(static_cast<std::string_view>(s->will_topic)),
+                s->will_payload, s->will_payload_len,
+                s->will_qos, s->will_retained);
+            conn_opts.set_will_message(will_msg);
+        }
+
+        if (s->ssl_enabled) {
+            paho::ssl_options ssl_opts;
+            if (!s->ssl_trust_store.empty()) {
+                auto ts = std::string(static_cast<std::string_view>(s->ssl_trust_store));
+                ssl_opts.set_trust_store(ts);
+            }
+            if (!s->ssl_key_store.empty()) {
+                auto ks = std::string(static_cast<std::string_view>(s->ssl_key_store));
+                ssl_opts.set_key_store(ks);
+            }
+            if (!s->ssl_private_key.empty()) {
+                auto pk = std::string(static_cast<std::string_view>(s->ssl_private_key));
+                ssl_opts.set_private_key(pk);
+            }
+            ssl_opts.set_enable_server_cert_auth(s->ssl_verify);
+            conn_opts.set_ssl(std::move(ssl_opts));
+        }
+
+        auto* s_ptr = s;
+        auto* connected_flag = &connected_;
+        cli->set_connected_handler([s_ptr, connected_flag](const std::string&) {
+            *connected_flag = true;
+            for (std::size_t i = 0; i < s_ptr->sub_count; ++i) {
+                try {
+                    s_ptr->client->subscribe(
+                        std::string(static_cast<std::string_view>(s_ptr->subscriptions[i].topic)),
+                        s_ptr->subscriptions[i].qos);
+                } catch (...) {}
+            }
+        });
 
         if constexpr (std::is_same_v<typename Config::poll_mode, mqtt_consumer_tag>) {
             cli->start_consuming();
@@ -245,6 +317,7 @@ pipepp::core::result mqtt_source<Config>::subscribe(std::string_view topic, int 
     auto* s = static_cast<mqtt_impl<Config>*>(impl_);
     try {
         s->client->subscribe(std::string(topic), qos)->wait_for(std::chrono::seconds(5));
+        s->add_subscription(topic, qos);
         return {};
     } catch (const paho::exception&) {
         return pipepp::core::result{
