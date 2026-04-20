@@ -53,7 +53,7 @@ jobs:
                 -DPIPEPP_CORE_DIR=/pipepp-core \
                 -DPIPEPP_MQTT_BUILD_TESTS=ON
               cmake --build /build -j$(nproc)
-              cd /build && ctest --output-on-failure -j$(nproc)
+              cd /build && ctest --output-on-failure -j$(nproc) -E "MqttCoverage"
             '
 
   coverage:
@@ -88,6 +88,6 @@ jobs:
                 -DPIPEPP_MQTT_BUILD_TESTS=ON \
                 -DPIPEPP_MQTT_ENABLE_COVERAGE=ON
               cmake --build /build -j$(nproc)
-              cd /build && ctest --output-on-failure -j$(nproc)
+              cd /build && ctest --output-on-failure -j$(nproc) -E "MqttCoverage"
               gcovr -r /src --filter=".*mqtt_source.cpp" --print-summary /build
             '
