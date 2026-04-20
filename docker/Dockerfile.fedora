@@ -31,6 +31,8 @@ RUN dnf install -y \
     && rm -rf /tmp/paho.* \
     && dnf clean all
 
+ENV LD_LIBRARY_PATH=/usr/local/lib64
+
 WORKDIR /build
 
 CMD ["bash"]
