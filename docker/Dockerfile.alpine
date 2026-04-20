@@ -28,8 +28,9 @@ RUN apk add --no-cache \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DPAHO_BUILD_STATIC=OFF \
     && cmake --build build --target install \
-    && ldconfig /usr/local/lib \
     && rm -rf /tmp/paho.*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /build
 
