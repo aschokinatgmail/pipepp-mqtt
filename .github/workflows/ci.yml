@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 (GCC)
+            dockerfile: docker/Dockerfile.ubuntu
+            image: mqtt-ubuntu
+            builder: bash
+          - name: Alpine 3.21 (GCC -Os)
+            dockerfile: docker/Dockerfile.alpine
+            image: mqtt-alpine
+            builder: sh
+          - name: Fedora 42 (GCC)
+            dockerfile: docker/Dockerfile.fedora
+            image: mqtt-fedora
+            builder: bash
+
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aschokinatgmail/pipepp-core
+          path: pipepp-core
+
+      - name: Build image
+        run: docker build -f ${{ matrix.dockerfile }} -t ${{ matrix.image }} .
+
+      - name: Build and test
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/src \
+            -v ${{ github.workspace }}/pipepp-core:/pipepp-core \
+            ${{ matrix.image }} \
+            ${{ matrix.builder }} -c '
+              set -e
+              mkdir -p /build
+              cmake -S /src -B /build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DPIPEPP_CORE_DIR=/pipepp-core \
+                -DPIPEPP_MQTT_BUILD_TESTS=ON
+              cmake --build /build -j$(nproc)
+              cd /build && ctest --output-on-failure -j$(nproc) -E "MqttCoverage"
+            '
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: test
+    name: Coverage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aschokinatgmail/pipepp-core
+          path: pipepp-core
+
+      - name: Build image
+        run: docker build -f docker/Dockerfile.coverage -t mqtt-coverage .
+
+      - name: Build, test, and report
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/src \
+            -v ${{ github.workspace }}/pipepp-core:/pipepp-core \
+            mqtt-coverage \
+            bash -c '
+              set -e
+              mkdir -p /build
+              cmake -S /src -B /build \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_COMPILER=g++ \
+                -DPIPEPP_CORE_DIR=/pipepp-core \
+                -DPIPEPP_MQTT_BUILD_TESTS=ON \
+                -DPIPEPP_MQTT_ENABLE_COVERAGE=ON
+              cmake --build /build -j$(nproc)
+              cd /build && ctest --output-on-failure -j$(nproc) -E "MqttCoverage"
+              gcovr -r /src --filter=".*mqtt_source.cpp" --print-summary /build
+            '
